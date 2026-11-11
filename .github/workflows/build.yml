@@ -19,7 +19,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  # Если запуск ручной и передана версия — берем её, иначе генерируем динамическую на основе даты
   RELEASE_VERSION: ${{ github.event.inputs.version }}
 
 jobs:
@@ -31,24 +30,20 @@ jobs:
       - name: Check latest commit time from getmikan/Citrus
         id: check
         run: |
-          # Если это ручной запуск, пропускаем проверку времени и сразу запускаем сборку
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Получаем дату последнего коммита в ветке main оригинального репозитория
           LAST_COMMIT_DATE=$(curl -s "https://api.github.com/repos/getmikan/Citrus/commits/main" | jq -r '.commit.committer.date')
           echo "Last commit in Citrus: $LAST_COMMIT_DATE"
 
-          # Переводим в секунды UNIX
           LAST_COMMIT_SEC=$(date -d "$LAST_COMMIT_DATE" +%s)
           CURRENT_SEC=$(date +%s)
           DIFF_HOURS=$(( (CURRENT_SEC - LAST_COMMIT_SEC) / 3600 ))
 
           echo "Hours since last commit: $DIFF_HOURS"
 
-          # Если коммит был менее чем 24 часа назад, разрешаем сборку
           if [ "$DIFF_HOURS" -le 24 ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
           else
@@ -104,7 +99,7 @@ jobs:
           - { goos: freebsd, goarch: '386', output: '386' }
           - { goos: freebsd, goarch: amd64, goamd64: v1, output: amd64-compatible }
           - { goos: freebsd, goarch: amd64, goamd64: v3, output: amd64 }
-          - { goos: freebsd, goarch: freebsd, goarch: amd64, goamd64: v1, output: amd64-v1 }
+          - { goos: freebsd, goarch: amd64, goamd64: v1, output: amd64-v1 }
           - { goos: freebsd, goarch: amd64, goamd64: v2, output: amd64-v2 }
           - { goos: freebsd, goarch: amd64, goamd64: v3, output: amd64-v3 }
           - { goos: freebsd, goarch: arm64, output: arm64 }
@@ -115,7 +110,6 @@ jobs:
           - { goos: android, goarch: arm64, ndk: aarch64-linux-android34, output: arm64-v8 }
 
     steps:
-      # Клонируем официальный репозиторий вместо текущего
       - name: Checkout Citrus repository
         uses: actions/checkout@v4
         with:
@@ -134,7 +128,6 @@ jobs:
 
       - name: Set variables
         run: |
-          # Генерируем версию по дате (например, v2026.11.11 или по текущему дню) если версия не задана
           DATE_TAG="v$(date +%Y.%m.%d)"
           if [ -z "$RELEASE_VERSION" ]; then
             VERSION="$DATE_TAG"
@@ -290,12 +283,7 @@ jobs:
         run: |
           VERSION="$(tr -d '\r\n' < bin/version.txt)"
           echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
-          cp ./.github/genReleaseNote.sh ./ || true
-          if [ -f genReleaseNote.sh ]; then
-            bash ./genReleaseNote.sh -v "HEAD" || true
-          else
-            echo "Daily automated build for version $VERSION" > release.md
-          fi
+          echo "Daily automated build for version $VERSION" > release.md
 
       - name: Create GitHub Release and Upload Assets
         uses: softprops/action-gh-release@v2
