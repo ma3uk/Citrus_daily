@@ -1,21 +1,21 @@
-name: Build & Release Daily
+name: Build & Release Hourly on Changes
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Tag version to release"
+        description: "Tag version to release (leave blank to use commit hash)"
         required: false
   schedule:
-    # 20:00 по Московскому времени (UTC+3) — это 17:00 UTC
-    - cron: "0 17 * * *"
+    # Запуск каждый час (в 0 минут каждого часа)
+    - cron: "0 * * * *"
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   REGISTRY: ghcr.io
@@ -26,29 +26,40 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
+      commit_hash: ${{ steps.check.outputs.commit_hash }}
     steps:
-      - name: Check latest commit time from getmikan/Citrus
+      - name: Check latest commit from getmikan/Citrus
         id: check
         run: |
+          # Получаем данные о последнем коммите в main оригинального репозитория
+          API_RESPONSE=$(curl -s "https://api.github.com/repos/getmikan/Citrus/commits/main")
+          LAST_COMMIT_DATE=$(echo "$API_RESPONSE" | jq -r '.commit.committer.date')
+          FULL_SHA=$(echo "$API_RESPONSE" | jq -r '.sha')
+          SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
+          
+          echo "Latest commit SHA: $SHORT_SHA ($LAST_COMMIT_DATE)"
+          echo "commit_hash=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+          # Если это ручной запуск, пропускаем проверку времени
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          LAST_COMMIT_DATE=$(curl -s "https://api.github.com/repos/getmikan/Citrus/commits/main" | jq -r '.commit.committer.date')
-          echo "Last commit in Citrus: $LAST_COMMIT_DATE"
-
+          # Считаем разницу в часах между текущим моментом и последним коммитом
           LAST_COMMIT_SEC=$(date -d "$LAST_COMMIT_DATE" +%s)
           CURRENT_SEC=$(date +%s)
           DIFF_HOURS=$(( (CURRENT_SEC - LAST_COMMIT_SEC) / 3600 ))
 
           echo "Hours since last commit: $DIFF_HOURS"
 
-          if [ "$DIFF_HOURS" -le 24 ]; then
+          # Если коммит был менее 1 часа назад (проверяем интервал за последний час), запускаем сборку
+          if [ "$DIFF_HOURS" -lt 1 ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "New changes detected within the last hour. Proceeding with build."
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "No changes in the last 24 hours. Skipping build."
+            echo "No changes in the last hour. Skipping build."
           fi
 
   build:
@@ -75,7 +86,7 @@ jobs:
           - { goos: linux, goarch: mipsle, gomips: softfloat, output: mipsle-softfloat }
           - { goos: linux, goarch: mips64, output: mips64 }
           - { goos: linux, goarch: mips64le, output: mips64le, debian: mips64el, rpm: mips64el }
-          - { goos: linux, goarch: loong64, output: loong64-abi1, abi: '1', debian: loongarch64, rpm: loongarch64, goversion: 'custom' }
+          - { goos: linux, goarch: loong64, output: loong64-abi1, abi: '1', debian: loongarch64, rpm: loong64, goversion: 'custom' }
           - { goos: linux, goarch: loong64, output: loong64-abi2, abi: '2', debian: loong64, rpm: loong64 }
           - { goos: linux, goarch: riscv64, output: riscv64, debian: riscv64, rpm: riscv64 }
           - { goos: linux, goarch: s390x, output: s390x, debian: s390x, rpm: s390x }
@@ -128,13 +139,14 @@ jobs:
 
       - name: Set variables
         run: |
-          DATE_TAG="v$(date +%Y.%m.%d)"
+          # Берем хэш коммита из Citrus в качестве версии (например, b0f91a1)
+          HASH_TAG="${{ needs.check-updates.outputs.commit_hash }}"
           if [ -z "$RELEASE_VERSION" ]; then
-            VERSION="$DATE_TAG"
+            VERSION="$HASH_TAG"
           else
             VERSION="$RELEASE_VERSION"
           fi
-          PackageVersion="${VERSION#v}"
+          PackageVersion="0.0.0-$HASH_TAG"
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "PackageVersion=${PackageVersion}" >> $GITHUB_ENV
@@ -283,7 +295,7 @@ jobs:
         run: |
           VERSION="$(tr -d '\r\n' < bin/version.txt)"
           echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Daily automated build for version $VERSION" > release.md
+          echo "Automated build for Citrus commit ${{ needs.check-updates.outputs.commit_hash }}" > release.md
 
       - name: Create GitHub Release and Upload Assets
         uses: softprops/action-gh-release@v2
